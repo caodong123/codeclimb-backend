@@ -21,7 +21,9 @@ import com.yupi.codeclimb.model.vo.LoginUserVO;
 import com.yupi.codeclimb.model.vo.UserVO;
 import com.yupi.codeclimb.service.UserService;
 
+import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
@@ -60,6 +62,34 @@ public class UserController {
     private WxOpenConfig wxOpenConfig;
 
     // region 登录相关
+
+    @GetMapping("/get/sign_in")
+    public BaseResponse<List<Integer>> getUserSignInRecord(Integer year, HttpServletRequest request){
+        //获取登录用户
+        User user = userService.getLoginUser(request);
+        if(user == null){
+            throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
+        }
+        List<Integer> userSignInRecord = userService.getUserSignInRecord(user.getId(), year);
+        return ResultUtils.success(userSignInRecord);
+    }
+
+
+    /**
+     * 增加用户的签到记录
+     * @param request
+     * @return
+     */
+    @PostMapping("/add/sign_in")
+    public BaseResponse<Boolean> addUserSignIn(HttpServletRequest request){
+        //获取登录用户
+        User user = userService.getLoginUser(request);
+        if(user == null){
+            throw new BusinessException(ErrorCode.NOT_LOGIN_ERROR);
+        }
+        boolean result = userService.addUserSignIn(user.getId());
+        return ResultUtils.success(result);
+    }
 
     /**
      * 用户注册

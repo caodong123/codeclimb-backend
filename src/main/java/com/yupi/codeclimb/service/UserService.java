@@ -6,7 +6,10 @@ import com.yupi.codeclimb.model.dto.user.UserQueryRequest;
 import com.yupi.codeclimb.model.entity.User;
 import com.yupi.codeclimb.model.vo.LoginUserVO;
 import com.yupi.codeclimb.model.vo.UserVO;
+
+import java.time.LocalDate;
 import java.util.List;
+import java.util.Map;
 import javax.servlet.http.HttpServletRequest;
 import me.chanjar.weixin.common.bean.WxOAuth2UserInfo;
 
@@ -17,6 +20,16 @@ import me.chanjar.weixin.common.bean.WxOAuth2UserInfo;
  * @from <a href="https://yupi.icu">编程导航知识星球</a>
  */
 public interface UserService extends IService<User> {
+
+    List<Integer> getUserSignInRecord(long userId,Integer year);
+
+
+    /**
+     * 添加用户签到记录
+     * @param userId
+     * @return
+     */
+    boolean addUserSignIn(long userId);
 
     /**
      * 用户注册

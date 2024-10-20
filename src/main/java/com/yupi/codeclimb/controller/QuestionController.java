@@ -13,13 +13,16 @@ import com.yupi.codeclimb.common.ResultUtils;
 import com.yupi.codeclimb.constant.UserConstant;
 import com.yupi.codeclimb.exception.BusinessException;
 import com.yupi.codeclimb.exception.ThrowUtils;
+import com.yupi.codeclimb.model.dto.post.PostQueryRequest;
 import com.yupi.codeclimb.model.dto.question.QuestionAddRequest;
 import com.yupi.codeclimb.model.dto.question.QuestionEditRequest;
 import com.yupi.codeclimb.model.dto.question.QuestionQueryRequest;
 import com.yupi.codeclimb.model.dto.question.QuestionUpdateRequest;
+import com.yupi.codeclimb.model.entity.Post;
 import com.yupi.codeclimb.model.entity.Question;
 import com.yupi.codeclimb.model.entity.QuestionBankQuestion;
 import com.yupi.codeclimb.model.entity.User;
+import com.yupi.codeclimb.model.vo.PostVO;
 import com.yupi.codeclimb.model.vo.QuestionVO;
 import com.yupi.codeclimb.service.QuestionBankQuestionService;
 import com.yupi.codeclimb.service.QuestionService;
@@ -255,6 +258,25 @@ public class QuestionController {
         ThrowUtils.throwIf(!result, ErrorCode.OPERATION_ERROR);
         return ResultUtils.success(true);
     }
+
+
+    /**
+     * 分页搜索（从 ES 查询，封装类）
+     *
+     * @param questionQueryRequest
+     * @param request
+     * @return
+     */
+    @PostMapping("/search/page/vo")
+    public BaseResponse<Page<QuestionVO>> searchQuestionVOByPage(@RequestBody QuestionQueryRequest questionQueryRequest,
+                                                                 HttpServletRequest request) {
+        long size = questionQueryRequest.getPageSize();
+        // 限制爬虫
+        ThrowUtils.throwIf(size > 200, ErrorCode.PARAMS_ERROR);
+        Page<Question> questionPage = questionService.searchFromEs(questionQueryRequest);
+        return ResultUtils.success(questionService.getQuestionVOPage(questionPage, request));
+    }
+
 
     // endregion
 }
