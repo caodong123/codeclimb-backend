@@ -1,6 +1,7 @@
 package com.yupi.codeclimb.controller;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.yupi.codeclimb.annotation.AuthCheck;
@@ -11,10 +12,7 @@ import com.yupi.codeclimb.common.ResultUtils;
 import com.yupi.codeclimb.constant.UserConstant;
 import com.yupi.codeclimb.exception.BusinessException;
 import com.yupi.codeclimb.exception.ThrowUtils;
-import com.yupi.codeclimb.model.dto.questionBankQuestion.QuestionBankQuestionAddRequest;
-import com.yupi.codeclimb.model.dto.questionBankQuestion.QuestionBankQuestionQueryRequest;
-import com.yupi.codeclimb.model.dto.questionBankQuestion.QuestionBankQuestionRemoveRequest;
-import com.yupi.codeclimb.model.dto.questionBankQuestion.QuestionBankQuestionUpdateRequest;
+import com.yupi.codeclimb.model.dto.questionBankQuestion.*;
 import com.yupi.codeclimb.model.entity.QuestionBankQuestion;
 import com.yupi.codeclimb.model.entity.User;
 import com.yupi.codeclimb.model.vo.QuestionBankQuestionVO;
@@ -26,6 +24,7 @@ import org.springframework.web.bind.annotation.*;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
+import java.util.List;
 
 /**
  * 题库关联题目接口
@@ -172,10 +171,11 @@ public class QuestionBankQuestionController {
         long current = questionBankQuestionQueryRequest.getCurrent();
         long size = questionBankQuestionQueryRequest.getPageSize();
         // 限制爬虫
-        ThrowUtils.throwIf(size > 20, ErrorCode.PARAMS_ERROR);
+        ThrowUtils.throwIf(size > 200, ErrorCode.PARAMS_ERROR);
         // 查询数据库
-        Page<QuestionBankQuestion> questionBankQuestionPage = questionBankQuestionService.page(new Page<>(current, size),
-                questionBankQuestionService.getQueryWrapper(questionBankQuestionQueryRequest));
+        QueryWrapper<QuestionBankQuestion> queryWrapper = questionBankQuestionService.getQueryWrapper(questionBankQuestionQueryRequest);
+        Page<QuestionBankQuestion> page = new Page<>(current, size);
+        Page<QuestionBankQuestion> questionBankQuestionPage = questionBankQuestionService.page(page, queryWrapper);
         // 获取封装类
         return ResultUtils.success(questionBankQuestionService.getQuestionBankQuestionVOPage(questionBankQuestionPage, request));
     }
@@ -227,6 +227,28 @@ public class QuestionBankQuestionController {
         return ResultUtils.success(result);
     }
 
+    @PostMapping("/add/batch")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+    public BaseResponse<Boolean> batchAddQuestionsToBank(@RequestBody QuestionBankQuestionBatchAddRequest questionBankQuestionBatchAddRequest, HttpServletRequest request) {
+        ThrowUtils.throwIf(questionBankQuestionBatchAddRequest == null, ErrorCode.PARAMS_ERROR, "传入参数为空");
+        Long questionBankId = questionBankQuestionBatchAddRequest.getQuestionBankId();
+        List<Long> questionIdList = questionBankQuestionBatchAddRequest.getQuestionIdList();
+        //获取登录用户
+        User user = userService.getLoginUser(request);
+        questionBankQuestionService.batchAddQuestionsToBank(questionIdList, questionBankId, user);
+        return ResultUtils.success(true);
+    }
+
+    @PostMapping("remove/batch")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+    public BaseResponse<Boolean> batchRemoveQuestionsFromBank(@RequestBody QuestionBankQuestionBatchRemoveRequest questionBankQuestionBatchRemoveRequest,
+                                                              HttpServletRequest request){
+        ThrowUtils.throwIf(questionBankQuestionBatchRemoveRequest == null, ErrorCode.PARAMS_ERROR,"传入参数为空");
+        Long questionBankId = questionBankQuestionBatchRemoveRequest.getQuestionBankId();
+        List<Long> questionIdList = questionBankQuestionBatchRemoveRequest.getQuestionIdList();
+        questionBankQuestionService.batchRemoveQuestionsFromBank(questionIdList, questionBankId);
+        return ResultUtils.success(true);
+    }
 
     // endregion
 }

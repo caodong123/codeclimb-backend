@@ -17,4 +17,5 @@
         id,questionBankId,questionId,
         userId,createTime,updateTime
     </sql>
+
 </mapper>

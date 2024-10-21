@@ -1,7 +1,10 @@
 package com.yupi.codeclimb.mapper;
 
+import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.yupi.codeclimb.model.entity.QuestionBankQuestion;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
+import org.springframework.data.repository.query.Param;
 
 /**
 * @author CAODONG
@@ -10,6 +13,7 @@ import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 * @Entity com.yupi.codeclimb.model.entity.QuestionBankQuestion
 */
 public interface QuestionBankQuestionMapper extends BaseMapper<QuestionBankQuestion> {
+
 
 }
 

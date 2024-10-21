@@ -1,11 +1,14 @@
 package com.yupi.codeclimb.service.impl;
 
 import cn.hutool.core.collection.CollUtil;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
+import com.baomidou.mybatisplus.core.toolkit.Wrappers;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.baomidou.mybatisplus.extension.service.impl.ServiceImpl;
 import com.yupi.codeclimb.common.ErrorCode;
 import com.yupi.codeclimb.constant.CommonConstant;
+import com.yupi.codeclimb.exception.BusinessException;
 import com.yupi.codeclimb.exception.ThrowUtils;
 import com.yupi.codeclimb.mapper.QuestionBankQuestionMapper;
 import com.yupi.codeclimb.model.dto.questionBankQuestion.QuestionBankQuestionQueryRequest;
@@ -23,12 +26,17 @@ import com.yupi.codeclimb.utils.SqlUtils;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.ObjectUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.springframework.aop.framework.AopContext;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.dao.DataAccessException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.stream.Collectors;
 
 /**
@@ -156,12 +164,137 @@ public class QuestionBankQuestionServiceImpl extends ServiceImpl<QuestionBankQue
             return questionBankQuestionVOPage;
         }
         // 对象列表 => 封装对象列表
-        List<QuestionBankQuestionVO> questionBankQuestionVOList = questionBankQuestionList.stream().map(questionBankQuestion -> {
-            return QuestionBankQuestionVO.objToVo(questionBankQuestion);
-        }).collect(Collectors.toList());
-
+        List<QuestionBankQuestionVO> questionBankQuestionVOList = questionBankQuestionList.stream().map(QuestionBankQuestionVO::objToVo).collect(Collectors.toList());
         questionBankQuestionVOPage.setRecords(questionBankQuestionVOList);
         return questionBankQuestionVOPage;
+    }
+
+
+    /**
+     * 批量添加题目到题库
+     * @param questionIdList
+     * @param questionBankId
+     * @param loginUser
+     */
+    @Override
+    public void batchAddQuestionsToBank(List<Long> questionIdList, Long questionBankId, User loginUser) {
+        //校验数据
+        ThrowUtils.throwIf(CollUtil.isEmpty(questionIdList),ErrorCode.PARAMS_ERROR,"题目列表为空");
+        ThrowUtils.throwIf(questionBankId == null || questionBankId<0,ErrorCode.PARAMS_ERROR,"题库ID非法");
+        ThrowUtils.throwIf(loginUser == null,ErrorCode.NOT_LOGIN_ERROR);
+        //选择合法的题目id
+        List<Question> questionList = questionService.listByIds(questionIdList);
+        List<Long> validQuestionIdList = questionList.stream()
+                .map(Question::getId)
+                .collect(Collectors.toList());
+        ThrowUtils.throwIf(CollUtil.isEmpty(validQuestionIdList),ErrorCode.PARAMS_ERROR,"合法的题目为空");
+        // 检查题库 id 是否存在
+// 检查哪些题目还不存在于题库中，避免重复插入
+        LambdaQueryWrapper<QuestionBankQuestion> lambdaQueryWrapper = Wrappers.lambdaQuery(QuestionBankQuestion.class)
+                .eq(QuestionBankQuestion::getQuestionBankId, questionBankId)
+                .in(QuestionBankQuestion::getQuestionId, validQuestionIdList);
+        List<QuestionBankQuestion> existQuestionList = this.list(lambdaQueryWrapper);
+// 已存在于题库中的题目 id
+        Set<Long> existQuestionIdSet = existQuestionList.stream()
+                .map(QuestionBankQuestion::getId)
+                .collect(Collectors.toSet());
+// 已存在于题库中的题目 id，不需要再次添加
+        validQuestionIdList = validQuestionIdList.stream().filter(questionId -> {
+            return !existQuestionIdSet.contains(questionId);
+        }).collect(Collectors.toList());
+        ThrowUtils.throwIf(CollUtil.isEmpty(validQuestionIdList), ErrorCode.PARAMS_ERROR, "所有题目都已存在于题库中");
+
+
+        // 自定义线程池
+        ThreadPoolExecutor customExecutor = new ThreadPoolExecutor(
+                4,                         // 核心线程数
+                10,                        // 最大线程数
+                60L,                       // 线程空闲存活时间
+                TimeUnit.SECONDS,           // 存活时间单位
+                new LinkedBlockingQueue<>(1000),  // 阻塞队列容量
+                new ThreadPoolExecutor.CallerRunsPolicy() // 拒绝策略：由调用线程处理任务
+        );
+        //保存所有批次的CompletableFuture
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+
+        int batchSize = 1000;
+        int total = validQuestionIdList.size();
+        for (int i = 0; i < total; i+= batchSize){
+            List<Long> subList = validQuestionIdList.subList(i, Math.min(total, i + batchSize));
+            List<QuestionBankQuestion> questionBankQuestions = subList.stream().map(questionId -> {
+                QuestionBankQuestion questionBankQuestion = new QuestionBankQuestion();
+                questionBankQuestion.setQuestionBankId(questionBankId);
+                questionBankQuestion.setQuestionId(questionId);
+                questionBankQuestion.setUserId(loginUser.getId());
+                return questionBankQuestion;
+            }).collect(Collectors.toList());
+            //获取代理   需要获取代理才能正确开启事务
+            QuestionBankQuestionService currentProxy = (QuestionBankQuestionServiceImpl) AopContext.currentProxy();
+            //异步处理每批数据到futures中
+            CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+                currentProxy.batchAddQuestionsToBankInner(questionBankQuestions);
+            }, customExecutor);
+            futures.add(future);
+            //等待所有批次任务完成
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+            //关闭线程池
+            customExecutor.shutdown();
+        }
+    }
+
+    /**
+     * 批量插入数据 仅内部使用
+     * @param questionBankQuestionList
+     */
+    @Override
+    @Transactional(rollbackFor =Exception.class)
+    public void batchAddQuestionsToBankInner(List<QuestionBankQuestion> questionBankQuestionList){
+
+        for (QuestionBankQuestion questionBankQuestion : questionBankQuestionList) {
+            Long id = questionBankQuestion.getId();
+            Long questionBankId = questionBankQuestion.getQuestionBankId();
+            try {
+                boolean result = this.save(questionBankQuestion);
+                if (!result) {
+                    throw new BusinessException(ErrorCode.OPERATION_ERROR, "向题库添加题目失败");
+                }
+            } catch (DataIntegrityViolationException e) {
+                log.error("数据库唯一键冲突或违反其他完整性约束，题目 id: {}, 题库 id: {}, 错误信息: {}",
+                        id, questionBankId, e.getMessage());
+                throw new BusinessException(ErrorCode.OPERATION_ERROR, "题目已存在于该题库，无法重复添加");
+            } catch (DataAccessException e) {
+                log.error("数据库连接问题、事务问题等导致操作失败，题目 id: {}, 题库 id: {}, 错误信息: {}",
+                        id, questionBankId, e.getMessage());
+                throw new BusinessException(ErrorCode.OPERATION_ERROR, "数据库操作失败");
+            } catch (Exception e) {
+                // 捕获其他异常，做通用处理
+                log.error("添加题目到题库时发生未知错误，题目 id: {}, 题库 id: {}, 错误信息: {}",
+                        id, questionBankId, e.getMessage());
+                throw new BusinessException(ErrorCode.OPERATION_ERROR, "向题库添加题目失败");
+            }
+        }
+    }
+
+
+    /**
+     * 批量删除题目关联题库
+     * @param questionIdList
+     * @param questionBankId
+     */
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void batchRemoveQuestionsFromBank(List<Long> questionIdList, Long questionBankId) {
+        //校验数据
+        ThrowUtils.throwIf(CollUtil.isEmpty(questionIdList),ErrorCode.PARAMS_ERROR,"题目列表为空");
+        ThrowUtils.throwIf(questionBankId == null || questionBankId<0,ErrorCode.PARAMS_ERROR,"题库ID非法");
+        //批量从题库删除题目
+        for (Long id : questionIdList) {
+            LambdaQueryWrapper<QuestionBankQuestion> wrapper = Wrappers.lambdaQuery(QuestionBankQuestion.class)
+                    .eq(QuestionBankQuestion::getQuestionId, id)
+                    .eq(QuestionBankQuestion::getQuestionBankId, questionBankId);
+            boolean result = this.remove(wrapper);
+            ThrowUtils.throwIf(!result,ErrorCode.OPERATION_ERROR,"删除题库题目关联失败");
+        }
     }
 
 }

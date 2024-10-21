@@ -54,8 +54,8 @@ server:
         max-age: 2592000
 mybatis-plus:
   configuration:
-    map-underscore-to-camel-case: false
     log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+    map-underscore-to-camel-case: false
   global-config:
     db-config:
       logic-delete-field: isDelete # 全局逻辑删除的实体字段名

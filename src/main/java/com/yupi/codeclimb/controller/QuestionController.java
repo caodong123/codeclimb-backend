@@ -14,10 +14,7 @@ import com.yupi.codeclimb.constant.UserConstant;
 import com.yupi.codeclimb.exception.BusinessException;
 import com.yupi.codeclimb.exception.ThrowUtils;
 import com.yupi.codeclimb.model.dto.post.PostQueryRequest;
-import com.yupi.codeclimb.model.dto.question.QuestionAddRequest;
-import com.yupi.codeclimb.model.dto.question.QuestionEditRequest;
-import com.yupi.codeclimb.model.dto.question.QuestionQueryRequest;
-import com.yupi.codeclimb.model.dto.question.QuestionUpdateRequest;
+import com.yupi.codeclimb.model.dto.question.*;
 import com.yupi.codeclimb.model.entity.Post;
 import com.yupi.codeclimb.model.entity.Question;
 import com.yupi.codeclimb.model.entity.QuestionBankQuestion;
@@ -275,6 +272,17 @@ public class QuestionController {
         ThrowUtils.throwIf(size > 200, ErrorCode.PARAMS_ERROR);
         Page<Question> questionPage = questionService.searchFromEs(questionQueryRequest);
         return ResultUtils.success(questionService.getQuestionVOPage(questionPage, request));
+    }
+
+    @PostMapping("/delete/batch")
+    @AuthCheck(mustRole = UserConstant.ADMIN_ROLE)
+    public BaseResponse<Boolean> batchDeleteQuestions(@RequestBody QuestionBatchDeleteRequest questionBatchDeleteRequest,
+                                                      HttpServletRequest request){
+        //校验参数
+        ThrowUtils.throwIf(questionBatchDeleteRequest == null, ErrorCode.PARAMS_ERROR);
+        List<Long> questionIdList = questionBatchDeleteRequest.getQuestionIdList();
+        questionService.batchDeleteQuestions(questionIdList);
+        return ResultUtils.success(true);
     }
 
 
