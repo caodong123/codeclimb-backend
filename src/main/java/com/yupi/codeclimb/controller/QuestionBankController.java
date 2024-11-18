@@ -1,6 +1,10 @@
 package com.yupi.codeclimb.controller;
 
+import com.alibaba.csp.sentinel.annotation.SentinelResource;
+import com.alibaba.csp.sentinel.slots.block.BlockException;
+import com.alibaba.csp.sentinel.slots.block.degrade.DegradeException;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.jd.platform.hotkey.client.callback.JdHotKeyStore;
 import com.yupi.codeclimb.annotation.AuthCheck;
 import com.yupi.codeclimb.common.BaseResponse;
 import com.yupi.codeclimb.common.DeleteRequest;
@@ -145,6 +149,18 @@ public class QuestionBankController {
         Long id = questionBankQueryRequest.getId();
         boolean needQuestionList = questionBankQueryRequest.isNeedQuestionList();
         ThrowUtils.throwIf(id == null || id <= 0 , ErrorCode.PARAMS_ERROR);
+
+        //判断是否是hotkey
+        String key = "bank_detail_" + id;
+        if(JdHotKeyStore.isHotKey(key)){
+            //从本地缓存中获取数据
+            Object cachedQuestionBankVO = JdHotKeyStore.get(key);
+            if(cachedQuestionBankVO != null){
+                return ResultUtils.success((QuestionBankVO)cachedQuestionBankVO);
+            }
+        }
+        //查询本地数据
+
         // 查询数据库
         QuestionBank questionBank = questionBankService.getById(id);
         ThrowUtils.throwIf(questionBank == null, ErrorCode.NOT_FOUND_ERROR);
@@ -158,6 +174,9 @@ public class QuestionBankController {
             Page<Question> questionList = questionService.listQuestionByPage(questionQueryRequest);
             questionBankVO.setQuestionPage(questionList);
         }
+
+        //写入本地缓存
+        JdHotKeyStore.smartSet(key,questionBankVO);
         // 获取封装类
         return ResultUtils.success(questionBankVO);
     }
@@ -187,6 +206,9 @@ public class QuestionBankController {
      * @return
      */
     @PostMapping("/list/page/vo")
+    @SentinelResource(value = "listQuestionBankVOByPage",
+            blockHandler = "handleBlockException",
+            fallback = "handleFallBack")
     public BaseResponse<Page<QuestionBankVO>> listQuestionBankVOByPage(@RequestBody QuestionBankQueryRequest questionBankQueryRequest,
                                                                HttpServletRequest request) {
         long current = questionBankQueryRequest.getCurrent();
@@ -198,6 +220,20 @@ public class QuestionBankController {
                 questionBankService.getQueryWrapper(questionBankQueryRequest));
         // 获取封装类
         return ResultUtils.success(questionBankService.getQuestionBankVOPage(questionBankPage, request));
+    }
+
+
+    public BaseResponse<Page<QuestionBankVO>> handleBlockException(@RequestBody QuestionBankQueryRequest questionBankQueryRequest,
+                                                                       HttpServletRequest request,BlockException ex){
+        if(ex instanceof DegradeException){
+            handleFallBack(questionBankQueryRequest,request,ex);
+        }
+        return ResultUtils.error(ErrorCode.SYSTEM_ERROR,"系统繁忙，请稍后再试！");
+    }
+
+    public BaseResponse<Page<QuestionBankVO>> handleFallBack(@RequestBody QuestionBankQueryRequest questionBankQueryRequest,
+                                                             HttpServletRequest request, Throwable ex){
+        return ResultUtils.success(null);
     }
 
     /**

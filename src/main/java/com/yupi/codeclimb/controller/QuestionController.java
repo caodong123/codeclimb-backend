@@ -1,6 +1,14 @@
 package com.yupi.codeclimb.controller;
 
+import cn.dev33.satoken.annotation.SaCheckRole;
+import cn.dev33.satoken.stp.StpUtil;
 import cn.hutool.json.JSONUtil;
+import com.alibaba.csp.sentinel.Entry;
+import com.alibaba.csp.sentinel.EntryType;
+import com.alibaba.csp.sentinel.SphU;
+import com.alibaba.csp.sentinel.Tracer;
+import com.alibaba.csp.sentinel.slots.block.BlockException;
+import com.alibaba.csp.sentinel.slots.block.degrade.DegradeException;
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.baomidou.mybatisplus.core.toolkit.Wrappers;
@@ -13,13 +21,16 @@ import com.yupi.codeclimb.common.ResultUtils;
 import com.yupi.codeclimb.constant.UserConstant;
 import com.yupi.codeclimb.exception.BusinessException;
 import com.yupi.codeclimb.exception.ThrowUtils;
+import com.yupi.codeclimb.manager.CounterManager;
 import com.yupi.codeclimb.model.dto.post.PostQueryRequest;
 import com.yupi.codeclimb.model.dto.question.*;
+import com.yupi.codeclimb.model.dto.questionBank.QuestionBankQueryRequest;
 import com.yupi.codeclimb.model.entity.Post;
 import com.yupi.codeclimb.model.entity.Question;
 import com.yupi.codeclimb.model.entity.QuestionBankQuestion;
 import com.yupi.codeclimb.model.entity.User;
 import com.yupi.codeclimb.model.vo.PostVO;
+import com.yupi.codeclimb.model.vo.QuestionBankVO;
 import com.yupi.codeclimb.model.vo.QuestionVO;
 import com.yupi.codeclimb.service.QuestionBankQuestionService;
 import com.yupi.codeclimb.service.QuestionService;
@@ -32,6 +43,7 @@ import javax.annotation.Resource;
 import javax.servlet.http.HttpServletRequest;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -53,6 +65,9 @@ public class QuestionController {
 
     @Resource
     private QuestionBankQuestionService questionBankQuestionService;
+
+    @Resource
+    private CounterManager counterManager;
 
     // region 增删改查
 
@@ -151,12 +166,46 @@ public class QuestionController {
     @GetMapping("/get/vo")
     public BaseResponse<QuestionVO> getQuestionVOById(long id, HttpServletRequest request) {
         ThrowUtils.throwIf(id <= 0, ErrorCode.PARAMS_ERROR);
+        //进行判断是否是爬虫
+        checkSpider(request);
         // 查询数据库
         Question question = questionService.getById(id);
         ThrowUtils.throwIf(question == null, ErrorCode.NOT_FOUND_ERROR);
         // 获取封装类
         return ResultUtils.success(questionService.getQuestionVO(question, request));
     }
+
+    // 防止爬虫 对题目的访问进行判断
+    private void checkSpider(HttpServletRequest request) {
+        final int bankCount = 20;
+        final int warnCount = 10;
+
+        User user = userService.getLoginUser(request);
+        ThrowUtils.throwIf(user == null, ErrorCode.NOT_LOGIN_ERROR);
+
+        String key = "user:access:" + user.getId();
+        long count = counterManager.incrAndGetCounter(key, 1, TimeUnit.MINUTES,180);
+
+        if(count > bankCount){
+            //踢下线
+            StpUtil.kickout(user.getId());
+            //封号
+            User updateUser = new User();
+            updateUser.setId(user.getId());
+            updateUser.setUserRole("ban");
+            userService.updateById(updateUser);
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR,"访问次数过多，已被封号");
+        }
+
+        if(count  == warnCount){
+            throw new BusinessException(ErrorCode.SYSTEM_ERROR,"警告访问太过于频繁");
+        }
+
+    }
+
+
+
+
 
     /**
      * 分页获取题目列表
@@ -165,6 +214,7 @@ public class QuestionController {
      * @return
      */
     @PostMapping("/list/page")
+    @SaCheckRole(UserConstant.ADMIN_ROLE)
     public BaseResponse<Page<Question>> listQuestionByPage(@RequestBody QuestionQueryRequest questionQueryRequest) {
         if(questionBankQuestionService == null) {
             throw new BusinessException(ErrorCode.NOT_FOUND_ERROR);
@@ -192,6 +242,60 @@ public class QuestionController {
                 questionService.getQueryWrapper(questionQueryRequest));
         // 获取封装类
         return ResultUtils.success(questionService.getQuestionVOPage(questionPage, request));
+    }
+
+
+    /**
+     * 分页获取题目列表（封装类   --限流熔断降级）
+     *
+     * @param questionQueryRequest
+     * @param request
+     * @return
+     */
+    @PostMapping("/list/page/vo/sentinel")
+    public BaseResponse<Page<QuestionVO>> listQuestionVOByPageSentinel(@RequestBody QuestionQueryRequest questionQueryRequest,
+                                                               HttpServletRequest request) throws BlockException {
+        long current = questionQueryRequest.getCurrent();
+        long size = questionQueryRequest.getPageSize();
+        // 限制爬虫
+        ThrowUtils.throwIf(size > 300, ErrorCode.PARAMS_ERROR);
+
+        //根据ip进行限流
+        String remoteAddr = request.getRemoteAddr();
+        //定义资源
+        Entry entry = null;
+        try {
+            entry = SphU.entry("listQuestionVOByPageSentinel", EntryType.IN, 1, remoteAddr);
+            // Your logic here.
+            // 查询数据库
+            Page<Question> questionPage = questionService.page(new Page<>(current, size),
+                    questionService.getQueryWrapper(questionQueryRequest));
+            // 获取封装类
+            return ResultUtils.success(questionService.getQuestionVOPage(questionPage, request));
+        } catch (Throwable ex) {
+            // Handle request rejection.
+            if(!BlockException.isBlockException(ex)){
+                //如果是业务异常  需要手动上报
+                Tracer.trace(ex);
+                return ResultUtils.error(ErrorCode.SYSTEM_ERROR,"系统错误");
+            }
+            //如果是熔断异常
+            if(ex instanceof DegradeException){
+                return handleFallBack(questionQueryRequest,request,ex);
+            }
+            //限流
+            return ResultUtils.error(ErrorCode.SYSTEM_ERROR,"系统繁忙，请稍后再试");
+
+        } finally {
+            if (entry != null) {
+                entry.exit(1, remoteAddr);
+            }
+        }
+    }
+
+    public BaseResponse<Page<QuestionVO>> handleFallBack(@RequestBody QuestionQueryRequest questionQueryRequest,
+                                                             HttpServletRequest request, Throwable ex){
+        return ResultUtils.success(null);
     }
 
     /**
