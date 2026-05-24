@@ -1,8 +1,8 @@
 package com.xc.codeclimbbackend.model.entity;
 
-import com.baomidou.mybatisplus.annotation.IdType;
-import com.baomidou.mybatisplus.annotation.TableId;
-import com.baomidou.mybatisplus.annotation.TableName;
+import com.baomidou.mybatisplus.annotation.*;
+
+import java.io.Serializable;
 import java.util.Date;
 import lombok.Data;
 
@@ -12,7 +12,7 @@ import lombok.Data;
  */
 @TableName(value ="question")
 @Data
-public class Question {
+public class Question implements Serializable {
     /**
      * id  改成雪花算法，连续自增 id 可能会有问题，被爬虫
      */
@@ -62,5 +62,9 @@ public class Question {
     /**
      * 是否删除
      */
+    @TableLogic
     private Integer isDelete;
+
+    @TableField(exist = false)
+    private static final long serialVersionUID = 1L;
 }
